@@ -15,9 +15,13 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from extraction.views import extract_regions_view
+from extraction.views import extract_regions_view, extract_regions_dual_view, extract_regions_front_view
 from django.views.decorators.csrf import csrf_exempt
 
 urlpatterns = [
     path('extraction/', csrf_exempt(extract_regions_view), name='extraction_api'),
+    path('extraction_dual/', csrf_exempt(extract_regions_dual_view),
+         name='extraction_api1'),
+    path('extraction_front/', csrf_exempt(extract_regions_front_view),
+         name='extraction_api2')
 ]

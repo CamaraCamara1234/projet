@@ -86,6 +86,155 @@ def extract_regions_view(request):
             os.remove(temp_path)
 
 
+@csrf_exempt
+def extract_regions_dual_view(request):
+    if request.method != 'POST':
+        return JsonResponse({
+            "status": "error",
+            "message": "Méthode non autorisée"
+        }, status=405)
+
+    image1 = request.FILES.get('image1')
+    image2 = request.FILES.get('image2')
+
+    if not image1 or not image2:
+        return JsonResponse({
+            "status": "error",
+            "message": "Deux images sont requises"
+        }, status=400)
+
+    temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+
+    temp_path_1 = os.path.join(temp_dir, image1.name)
+    temp_path_2 = os.path.join(temp_dir, image2.name)
+
+    try:
+        # Sauvegarde temporaire des fichiers
+        for image_file, temp_path in [(image1, temp_path_1), (image2, temp_path_2)]:
+            with open(temp_path, 'wb+') as f:
+                for chunk in image_file.chunks():
+                    f.write(chunk)
+
+        # Extraction des régions pour les deux images
+        regions1 = DetectionService.extract_and_save_regions(
+            temp_path_1, skip_validation=2)
+        regions2 = DetectionService.extract_and_save_regions(
+            temp_path_2, skip_validation=2)
+
+        if not regions1 or not regions2:
+            return JsonResponse({
+                "status": "error",
+                "message": "Une ou les deux images n'ont pas permis de détecter des régions"
+            }, status=400)
+
+        # Vérification des statuts
+        for regions in [regions1, regions2]:
+            first = regions[0]
+            if first.get('status') == 'rejected':
+                return JsonResponse({
+                    "status": "rejected",
+                    "message": first.get('message', 'Erreur de validation'),
+                    "details": first
+                }, status=400)
+
+        list_files = get_preprocessed_files()
+        if len(list_files) >= 2:
+            return handle_ocr_processing(list_files)
+
+        return JsonResponse({
+            "status": "success",
+            "regions_image1": regions1,
+            "regions_image2": regions2
+        })
+
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement double image : {str(e)}")
+        return JsonResponse({
+            "status": "error",
+            "message": f"Erreur de traitement : {str(e)}"
+        }, status=500)
+
+    finally:
+        # Suppression des fichiers temporaires
+        for temp_path in [temp_path_1, temp_path_2]:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
+@csrf_exempt
+def extract_regions_front_view(request):
+    if request.method != 'POST':
+        return JsonResponse({
+            "status": "error",
+            "message": "Méthode non autorisée"
+        }, status=405)
+
+    image1 = request.FILES.get('image1')
+
+    if not image1:
+        return JsonResponse({
+            "status": "error",
+            "message": "Une image est requise"
+        }, status=400)
+
+    temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+
+    temp_path_1 = os.path.join(temp_dir, image1.name)
+
+    try:
+        # Sauvegarde temporaire des fichiers
+        for image_file, temp_path in [(image1, temp_path_1)]:
+            with open(temp_path, 'wb+') as f:
+                for chunk in image_file.chunks():
+                    f.write(chunk)
+
+        # Extraction des régions pour les deux images
+        regions1 = DetectionService.extract_and_save_regions(
+            temp_path_1, skip_validation=2)
+
+        if not regions1:
+            return JsonResponse({
+                "status": "error",
+                "message": "l'images n'a pas permis de détecter des régions"
+            }, status=400)
+
+        # Vérification des statuts
+        for regions in [regions1]:
+            first = regions[0]
+            if first.get('status') == 'rejected':
+                return JsonResponse({
+                    "status": "rejected",
+                    "message": first.get('message', 'Erreur de validation'),
+                    "details": first
+                }, status=400)
+
+        list_files = get_preprocessed_files()
+        if len(list_files) == 1:
+            return handle_ocr_processing(list_files)
+
+        return JsonResponse({
+            "status": "success",
+            "regions_image1": regions1
+        })
+
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement double image : {str(e)}")
+        return JsonResponse({
+            "status": "error",
+            "message": f"Erreur de traitement : {str(e)}"
+        }, status=500)
+
+    finally:
+        # Suppression des fichiers temporaires
+        for temp_path in [temp_path_1]:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
+################################ les fonctions ########################################
+
 def handle_ocr_processing(list_files):
     try:
         t1 = time.time()
@@ -151,15 +300,31 @@ def process_text(result, label, list_files):
     text = result.text or ""
     if label in ["date_naissance", "date_expiration"]:
         return clean_and_format_date(text) if len(text) >= 10 else "N/A"
-    elif label not in ["code", "num_etat_civil", "adresse_ar", "adresse"]:
-        return advanced_clean(text)
-    elif label == "ville" and "sejour_recto" in list_files:
-        return text.replace("الجنسية", "")
-    elif label == "adresse":
-        return text.replace("esse ","")
     elif label == "mere":
-        return text.replace("Elde ","").replace("Etde ","")
+        return text.replace("Elde ", "").replace("Etde ", "")
+    elif label == "ville_ar" or label == "nationalite_ar":
+        return advanced_clean(text.replace(" الجنسية", "").replace(" ب", "").replace(".", ""))
+    elif label == "ville" or label == "nationalite":
+        text = text.replace("Nationalité ", "")
+        return nettoyage_texte(text)
+    elif label == "adresse":
+        return nettoyage_texte(text)
+    elif label not in ["code", "num_etat_civil", "adresse_ar", "adresse", "cin"]:
+        text1 = text.replace("1", "I")
+        return advanced_clean(text1)
     return text
+
+
+def nettoyage_texte(text):
+    words = text.strip().split()
+
+    if words:
+        first_word = words[0]
+        print("=====> : ", first_word)
+        if not first_word.isupper() or not first_word.isalnum():
+            words = words[1:]
+
+    return " ".join(words)
 
 
 def clean_and_format_date(date_text):
@@ -328,6 +493,6 @@ def mrz_precessing(mrz_code):
         '.'+list_elts[2][11:13]+'.'+list_elts[2][9:11]
     mrz_data["pays"] = list_elts[2][-3:]
     mrz_data["nom_mrz"] = list_elts[3].split(' ')[1]
-    mrz_data["prenom_mrz"] = list_elts[4]
+    mrz_data["prenom_mrz"] = ' '.join(list_elts[4:])
 
     return mrz_data

@@ -5,7 +5,6 @@ import pytesseract
 import numpy as np
 import re
 from paddleocr import PaddleOCR
-import easyocr
 from ultralytics import YOLO
 from typing import List, Tuple
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ class ExtractZonesTexts:
         self.lang = lang
         self.yolo_model = YOLO(yolo_model_path)
         self._paddle_ocr = None
-        self._easy_ocr = None
         self.tess_lang = 'ara' if lang == 'ara' else 'fra'
         self._create_directories()
 
@@ -46,13 +44,6 @@ class ExtractZonesTexts:
             self._paddle_ocr = PaddleOCR(
                 lang='arabic' if self.lang == 'ara' else self.lang)
         return self._paddle_ocr
-
-    @property
-    def easy_ocr(self):
-        if self._easy_ocr is None:
-            self._easy_ocr = easyocr.Reader(
-                ['ar'] if self.lang == 'ara' else ['fr'], gpu=False)
-        return self._easy_ocr
 
     def extract_regions(self, image_path: str) -> List[Tuple[str, str, float]]:
         try:
@@ -75,14 +66,16 @@ class ExtractZonesTexts:
                 label = result.names[int(box.cls)]
                 confidence = float(box.conf)
 
-                if label in {"adresse_ar"} and "new_cin_recto" in list_face:
-                    x2 += int(x2 * 0.04)
+                if label in {"pere"} and "new_cin_recto" in list_face:
+                    x2 += int(x2 * 0.02)
+                if label == "ville_ar" and any(face in list_face for face in ("new_cin_recto", "old_cin_recto")):
+                    x2 -= int(x2 * 0.03)
 
                 roi = img[y1:y2, x1:x2]
                 h, w = roi.shape[:2]
 
-                if max(h, w) < 250:
-                    scale = 250 / max(h, w)
+                if max(h, w) < 150 and label != "sexe":
+                    scale = 180 / max(h, w)
                     new_w, new_h = int(w * scale), int(h * scale)
                     roi = cv2.resize(roi, (new_w, new_h),
                                      interpolation=cv2.INTER_LANCZOS4)
@@ -116,14 +109,10 @@ class ExtractZonesTexts:
             text_tesseract = pytesseract.image_to_string(
                 gray, config=f"--oem 3 --psm 7 -l {lang_tess}").strip()
 
-            result_easy = self.easy_ocr.readtext(image_path, detail=0)
-            text_easy = " ".join(result_easy).strip()
-
             if lang == 'ar' and text_tesseract:
                 best_text = text_tesseract
             else:
-                best_text = max(
-                    [text_paddle, text_tesseract, text_easy], key=len)
+                best_text = max([text_paddle, text_tesseract], key=len)
 
             return ExtractionResult(
                 label=os.path.basename(image_path),
@@ -154,15 +143,16 @@ class ExtractZonesTexts:
             regions = self.extract_regions(image_path)
             results = []
             for label, region_path, confidence in regions:
-                try:
-                    lang = "ar" if "_ar" in label else "fr"
-                    result = self.extract_text(region_path, lang=lang)
-                    result.label = label
-                    result.confidence = confidence
-                    results.append(result)
-                except Exception as e:
-                    logger.warning(
-                        f"[Process Image] Échec traitement région {region_path}: {str(e)}")
+                if label != "photo":
+                    try:
+                        lang = "ar" if "_ar" in label else "fr"
+                        result = self.extract_text(region_path, lang=lang)
+                        result.label = label
+                        result.confidence = confidence
+                        results.append(result)
+                    except Exception as e:
+                        logger.warning(
+                            f"[Process Image] Échec traitement région {region_path}: {str(e)}")
             return results
         except Exception as e:
             logger.error(

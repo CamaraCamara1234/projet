@@ -129,7 +129,7 @@ class DetectionService:
 
     @classmethod
     def extract_and_save_regions(cls, image_path: str, output_dir: str = "preprocessed_imgs",
-                                 scale_factor: float = 1.0, max_dimension: int = 1600) -> List[Dict[str, Any]]:
+                                 scale_factor: float = 1.0, max_dimension: int = 1200, skip_validation: int = 1) -> List[Dict[str, Any]]:
         try:
             model = cls.get_model()
             img = cv2.imread(image_path)
@@ -155,18 +155,18 @@ class DetectionService:
                     x1, y1, x2, y2 = map(int, box)
                     region = img[y1:y2, x1:x2]
                     class_name = cls._dict_classes[int(cls_id)]
-
-                    validation = cls._validate_document_sequence(
-                        class_name, existing_files)
-                    if not validation["valid"]:
-                        return [{
-                            "path": '',
-                            "class": class_name,
-                            "original_bbox": box.tolist(),
-                            "scaled_size": region.shape[:2],
-                            "message": validation["message"],
-                            "status": "rejected"
-                        }]
+                    if skip_validation == 1:
+                        validation = cls._validate_document_sequence(
+                            class_name, existing_files)
+                        if not validation["valid"]:
+                            return [{
+                                "path": '',
+                                "class": class_name,
+                                "original_bbox": box.tolist(),
+                                "scaled_size": region.shape[:2],
+                                "message": validation["message"],
+                                "status": "rejected"
+                            }]
 
                     if scale_factor != 1.0:
                         h, w = region.shape[:2]
