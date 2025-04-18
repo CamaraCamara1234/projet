@@ -102,19 +102,51 @@ class ExtractZonesTexts:
             if image is None:
                 raise ValueError(f"Image non trouvée : {image_path}")
 
-            lang_tess = "fra" if lang == "fr" else "ara"
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # Ajout de l'anglais comme backup pour l'arabe
+            lang_tess = "fra" if lang == "fr" else "ara+eng"
 
+            # Pré-traitement spécifique pour l'arabe
+            if lang == 'ar':
+                # Conversion en niveaux de gris avec meilleur contraste
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                gray = cv2.GaussianBlur(gray, (3, 3), 0)
+                gray = cv2.threshold(
+                    gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+
+                # Dilation légère pour améliorer les caractères arabes
+                kernel = np.ones((1, 1), np.uint8)
+                gray = cv2.dilate(gray, kernel, iterations=1)
+            else:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+            # Extraction PaddleOCR
             result_paddle = self.paddle_ocr.ocr(image_path)
             text_paddle = " ".join(
                 [line[1][0] for line in result_paddle[0]]) if result_paddle and result_paddle[0] else ""
 
-            psm = "11" if lang == "ar" else "7"
-            text_tesseract = pytesseract.image_to_string(
-                gray, config=f"--oem 3 --psm {psm} -l {lang_tess}").strip()
+            # Configuration Tesseract optimisée pour l'arabe
+            # PSM 6 meilleur pour l'arabe (bloc uniforme de texte)
+            psm = "6" if lang == "ar" else "7"
+            config = f"--oem 3 --psm {psm} -l {lang_tess}"
 
-            if lang == 'ar' and text_tesseract:
-                best_text = text_tesseract
+            # Ajout de configurations spécifiques pour l'arabe
+            if lang == 'ar':
+                config += " -c tessedit_char_whitelist=ابتةثجحخدذرزسشصضطظعغفقكلمنهويىئءؤرلاـًٌٍَُِّْ٠١٢٣٤٥٦٧٨٩"
+
+            text_tesseract = pytesseract.image_to_string(
+                gray, config=config).strip()
+
+            # Post-traitement spécifique pour l'arabe
+            if lang == 'ar':
+                # Nettoyage des résultats
+                text_tesseract = re.sub(
+                    r'[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\s]', '', text_tesseract)
+                text_paddle = re.sub(
+                    r'[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\s]', '', text_paddle)
+
+                # Choix du meilleur texte avec priorité à Tesseract pour l'arabe
+                best_text = text_tesseract if len(text_tesseract) > len(
+                    text_paddle)*0.7 else text_paddle
             else:
                 best_text = max([text_paddle, text_tesseract], key=len)
 
