@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/3.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -42,6 +43,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -126,15 +128,14 @@ STATIC_URL = '/static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-import os
 # Ajouter à la fin du fichier
-PREPROCESSED_IMGS_DIR = os.path.join(BASE_DIR, 'extraction\preprocessed_imgs')
+PREPROCESSED_IMGS_DIR = os.path.join(BASE_DIR, 'media\preprocessed_imgs')
 
 # backend_api/settings.py
 
 # Ajoutez ces configurations
-MEDIA_ROOT = os.path.join(BASE_DIR, '')
-MEDIA_URL = '/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_URL = '/media/'
 
 # Dossier pour les modèles
 MODEL_DIRS = {
@@ -174,4 +175,3 @@ CORS_ALLOW_HEADERS = [
 
 # Pour le développement seulement :
 CORS_ALLOW_ALL_ORIGINS = True
-

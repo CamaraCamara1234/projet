@@ -34,9 +34,9 @@ class ExtractZonesTexts:
         self._create_directories()
 
     def _create_directories(self):
-        for subdir in ["corrected_imgs", "extracted_regions", "temp"]:
+        for subdir in ["extracted_regions", "temp"]:
             os.makedirs(os.path.join(settings.BASE_DIR,
-                        "extraction", subdir), exist_ok=True)
+                        "media", subdir), exist_ok=True)
 
     @property
     def paddle_ocr(self):
@@ -55,7 +55,7 @@ class ExtractZonesTexts:
                 raise ValueError(f"Image non trouvée : {image_path}")
 
             extracted_dir = os.path.join(
-                settings.BASE_DIR, "extraction", "extracted_regions")
+                settings.BASE_DIR, "media", "extracted_regions")
             os.makedirs(extracted_dir, exist_ok=True)
 
             extracted_regions = []
@@ -70,6 +70,9 @@ class ExtractZonesTexts:
                     x2 += int(x2 * 0.02)
                 if label == "ville_ar" and any(face in list_face for face in ("new_cin_recto", "old_cin_recto")):
                     x2 -= int(x2 * 0.03)
+                if label == "ville_ar" and any(face in list_face for face in ("sejour_recto", "sejour_verso")):
+                    x2 -= int(x2 * 0.077)
+                    y1 += int(y1 * 0.02)
 
                 roi = img[y1:y2, x1:x2]
                 h, w = roi.shape[:2]
@@ -106,8 +109,9 @@ class ExtractZonesTexts:
             text_paddle = " ".join(
                 [line[1][0] for line in result_paddle[0]]) if result_paddle and result_paddle[0] else ""
 
+            psm = "11" if lang == "ar" else "7"
             text_tesseract = pytesseract.image_to_string(
-                gray, config=f"--oem 3 --psm 7 -l {lang_tess}").strip()
+                gray, config=f"--oem 3 --psm {psm} -l {lang_tess}").strip()
 
             if lang == 'ar' and text_tesseract:
                 best_text = text_tesseract
@@ -143,7 +147,7 @@ class ExtractZonesTexts:
             regions = self.extract_regions(image_path)
             results = []
             for label, region_path, confidence in regions:
-                if label != "photo":
+                if label != "photo" and label != "photo_portrait":
                     try:
                         lang = "ar" if "_ar" in label else "fr"
                         result = self.extract_text(region_path, lang=lang)

@@ -17,11 +17,17 @@ from django.contrib import admin
 from django.urls import path
 from extraction.views import extract_regions_view, extract_regions_dual_view, extract_regions_front_view
 from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
+from django.conf.urls.static import static
+from facial_recognition.views import verify_faces, clear_media_dirs
 
 urlpatterns = [
     path('extraction/', csrf_exempt(extract_regions_view), name='extraction_api'),
     path('extraction_dual/', csrf_exempt(extract_regions_dual_view),
          name='extraction_api1'),
     path('extraction_front/', csrf_exempt(extract_regions_front_view),
-         name='extraction_api2')
-]
+         name='extraction_api_front'),
+    path('face_verification/', csrf_exempt(verify_faces),
+         name='face_verification_api'),
+    path('clear-directories/', csrf_exempt(clear_media_dirs), name='clear_media_dirs')
+]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

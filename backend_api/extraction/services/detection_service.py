@@ -138,7 +138,7 @@ class DetectionService:
                     f"Impossible de charger l'image : {image_path}")
 
             full_output_dir = os.path.join(
-                settings.BASE_DIR, "extraction", output_dir)
+                settings.BASE_DIR, "media", output_dir)
             os.makedirs(full_output_dir, exist_ok=True)
 
             existing_files = [

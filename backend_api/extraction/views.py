@@ -266,6 +266,11 @@ def handle_ocr_processing(list_files):
         t2 = time.time()
         return JsonResponse({
             "status": "success",
+            "photo": settings.MEDIA_URL + "extracted_regions/photo.png",
+            "photo_portrait": settings.MEDIA_URL + "extracted_regions/photo_portrait.png",
+            "mrz_image": settings.MEDIA_URL + "extracted_regions/code.png",
+            "cin_recto": settings.MEDIA_URL + f"preprocessed_imgs/{list_files[0]}.jpg",
+            "cin_verso": settings.MEDIA_URL + f"preprocessed_imgs/{list_files[1]}.jpg" if len(list_files) >= 2 else "N/A",
             "extracted_data": list(best_results.values()),
             "mrz_data": mrz_data,
             "temps": t2 - t1
@@ -297,21 +302,30 @@ def map_label(label, list_files):
 
 
 def process_text(result, label, list_files):
-    text = result.text or ""
-    if label in ["date_naissance", "date_expiration"]:
+    text = (result.text or "").strip()
+
+    if not text:
+        return "N/A" if label in ["date_naissance", "date_expiration"] else ""
+
+    if label in {"date_naissance", "date_expiration"}:
         return clean_and_format_date(text) if len(text) >= 10 else "N/A"
-    elif label == "mere":
+
+    if label == "mere":
         return text.replace("Elde ", "").replace("Etde ", "")
-    elif label == "ville_ar" or label == "nationalite_ar":
-        return advanced_clean(text.replace(" الجنسية", "").replace(" ب", "").replace(".", ""))
-    elif label == "ville" or label == "nationalite":
-        text = text.replace("Nationalité ", "")
+
+    if label in {"ville_ar", "nationalite_ar"}:
+        return advanced_clean(text)
+
+    if label in {"ville", "nationalite"}:
+        return nettoyage_texte(text.replace("Nationalité ", ""))
+
+    if label == "adresse":
         return nettoyage_texte(text)
-    elif label == "adresse":
-        return nettoyage_texte(text)
-    elif label not in ["code", "num_etat_civil", "adresse_ar", "adresse", "cin"]:
-        text1 = text.replace("1", "I")
-        return advanced_clean(text1)
+
+    if label not in {"code", "num_etat_civil", "adresse_ar", "adresse", "cin"}:
+        cleaned_text = text.replace("1", "I").replace("<", "").replace(">", "")
+        return advanced_clean(cleaned_text)
+
     return text
 
 
@@ -320,8 +334,7 @@ def nettoyage_texte(text):
 
     if words:
         first_word = words[0]
-        print("=====> : ", first_word)
-        if not first_word.isupper() or not first_word.isalnum():
+        if (not first_word.isupper() or not first_word.isalnum()) and len(words) > 1:
             words = words[1:]
 
     return " ".join(words)
@@ -408,7 +421,7 @@ def advanced_clean(text):
 def get_preprocessed_files():
     """Liste les fichiers prétraités sans extension"""
     preprocessed_dir = getattr(settings, 'PREPROCESSED_IMGS_DIR',
-                               os.path.join(settings.BASE_DIR, 'extraction', 'preprocessed_imgs'))
+                               os.path.join(settings.BASE_DIR, 'media', 'preprocessed_imgs'))
 
     os.makedirs(preprocessed_dir, exist_ok=True)
 
@@ -440,7 +453,7 @@ def process_ocr_for_files(file_list):
 
             image_path = os.path.join(
                 settings.BASE_DIR,
-                f"extraction/preprocessed_imgs/{face}.jpg"
+                f"media/preprocessed_imgs/{face}.jpg"
             )
             logger.info(f"Traitement de l'image : {image_path}")
 
