@@ -60,12 +60,15 @@ def verify_faces(request):
         )
 
         # Préparer la réponse
-        verified = result['distance'] <= ARC_THRESHOLD
+        distance = result['distance']
+        verified = distance <= ARC_THRESHOLD
+        similarity_percent = calculate_similarity(distance)
 
         return JsonResponse({
             'verified': verified,
             'distance': float(result['distance']),
             'threshold': ARC_THRESHOLD,
+            'confidence': similarity_percent,
             'model': 'ArcFace',
             'uploaded_image': settings.MEDIA_URL + "extracted_regions/photo_capture.png"
         })
@@ -101,3 +104,26 @@ def clear_media_dirs(request):
         "cleared_folders": cleared,
         "errors": errors
     })
+
+
+def calculate_similarity(distance, ARC_THRESHOLD=0.68):
+    if distance <= 0.07:  # 0-0.07
+        return 100.0
+    elif distance <= 0.14:  # 0.07-0.14
+        return 90.0
+    elif distance <= 0.21:  # 0.14-0.21
+        return 80.0
+    elif distance <= 0.28:  # 0.21-0.28
+        return 70.0
+    elif distance <= 0.35:  # 0.28-0.35
+        return 60.0
+    elif distance <= 0.42:  # 0.35-0.42
+        return 50.0
+    elif distance <= 0.49:  # 0.42-0.49
+        return 40.0
+    elif distance <= 0.56:  # 0.49-0.56
+        return 30.0
+    elif distance <= ARC_THRESHOLD:  # 0.56-0.68
+        return 20.0
+    else:  # > 0.68
+        return 0.0

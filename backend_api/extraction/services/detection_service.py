@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import os
 import cv2
 from ultralytics import YOLO
@@ -11,72 +12,130 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def correct_skew_and_save(image: np.ndarray, save_path: str) -> None:
+def correct_skew_and_save(image: np.ndarray, save_path: str, angle_range=(-20, 20), top_n=5) -> np.ndarray:
     """
-    Corrige l'inclinaison d'une image, améliore légèrement le contraste, applique un défloutage et sauvegarde la meilleure qualité.
+    Redresse une image en détectant les lignes quasi-horizontales et en corrigeant l'inclinaison, puis recadre.
+
+    Args:
+        image: image originale (np.ndarray).
+        save_path: chemin de sauvegarde de l'image redressée.
+        angle_range: plage d'angle en degrés pour considérer les lignes horizontales.
+        top_n: nombre de lignes les plus longues à utiliser pour le calcul de l'angle.
+
+    Returns:
+        Image redressée et recadrée (np.ndarray).
     """
     try:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(
-            gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
 
-        contours, _ = cv2.findContours(
-            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contour_image = np.zeros_like(binary)
-        cv2.drawContours(contour_image, contours, -1,
-                         (255), thickness=cv2.FILLED)
-
-        lines = cv2.HoughLinesP(
-            contour_image, 1, np.pi / 180, threshold=100, minLineLength=50, maxLineGap=5)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
+                                threshold=100, minLineLength=30, maxLineGap=10)
         angles = []
 
+        corrected = image  # fallback
+        rotated = False
+
         if lines is not None:
+            lignes_filtrées = []
             for line in lines:
                 x1, y1, x2, y2 = line[0]
                 angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
-                if -10 < angle < 10:
-                    angles.append(angle)
+                length = np.hypot(x2 - x1, y2 - y1)
 
-        if angles:
-            median_angle = np.median(angles)
-            logger.info(
-                f"Angle d'inclinaison détecté : {median_angle:.2f} degrés")
+                if angle_range[0] < angle < angle_range[1]:
+                    lignes_filtrées.append((length, angle))
 
-            if abs(median_angle) > 1.0:
+            lignes_filtrées = sorted(
+                lignes_filtrées, key=lambda x: x[0], reverse=True)[:top_n]
+
+            if lignes_filtrées:
+                angles = [angle for _, angle in lignes_filtrées]
+                angle_median = np.median(angles)
+                print(
+                    f"✅ Angle médian détecté pour correction : {angle_median:.2f}°")
+
+                # Rotation inverse
                 (h, w) = image.shape[:2]
                 center = (w // 2, h // 2)
-                M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
-                image = cv2.warpAffine(
+                M = cv2.getRotationMatrix2D(center, angle_median, 1.0)
+                corrected = cv2.warpAffine(
                     image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-
-        # -------- Post-traitements qualité --------
-
-        # Contraste léger avec CLAHE
-        # lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-        # l, a, b = cv2.split(lab)
-        # clahe = cv2.createCLAHE(clipLimit=0.8, tileGridSize=(8, 8))
-        # cl = clahe.apply(l)
-        # limg = cv2.merge((cl, a, b))
-        # image = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
-
-        # # Sharpening léger
-        # kernel = np.array([[0, -1, 0],
-        #                    [-1, 5, -1],
-        #                    [0, -1, 0]])
-        # image = cv2.filter2D(image, -1, kernel)
-
-        # Sauvegarde en haute qualité JPEG
-        if save_path.lower().endswith(".jpg") or save_path.lower().endswith(".jpeg"):
-            cv2.imwrite(save_path, image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                rotated = True
+            else:
+                print("❌ Aucune ligne satisfaisante pour estimer l'inclinaison.")
         else:
-            cv2.imwrite(save_path, image)
+            print("❌ Aucune ligne détectée dans l’image.")
 
-        logger.info(f"Image traitée et sauvegardée : {save_path}")
+        # Recadrage automatique (suppression des bordures vides après rotation)
+        if rotated:
+            gray_corr = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray_corr, 1, 255, cv2.THRESH_BINARY)
+            contours, _ = cv2.findContours(
+                thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                x, y, w, h = cv2.boundingRect(np.vstack(contours))
+                corrected = corrected[y:y+h, x:x+w]
+
+        # Sauvegarde
+        if save_path.lower().endswith(".jpg") or save_path.lower().endswith(".jpeg"):
+            cv2.imwrite(save_path, corrected, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        else:
+            cv2.imwrite(save_path, corrected)
 
     except Exception as e:
-        logger.error(
-            f"Erreur lors de la correction et du traitement : {str(e)}")
-        cv2.imwrite(save_path, image)
+        print(f"❌ Erreur : {str(e)}")
+
+
+# def correct_skew_and_save(image: np.ndarray, save_path: str) -> None:
+#     """
+#     Corrige l'inclinaison d'une image, améliore légèrement le contraste, applique un défloutage et sauvegarde la meilleure qualité.
+#     """
+#     try:
+#         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+#         _, binary = cv2.threshold(
+#             gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+#         contours, _ = cv2.findContours(
+#             binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+#         contour_image = np.zeros_like(binary)
+#         cv2.drawContours(contour_image, contours, -1,
+#                          (255), thickness=cv2.FILLED)
+
+#         lines = cv2.HoughLinesP(
+#             contour_image, 1, np.pi / 180, threshold=100, minLineLength=50, maxLineGap=5)
+#         angles = []
+
+#         if lines is not None:
+#             for line in lines:
+#                 x1, y1, x2, y2 = line[0]
+#                 angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
+#                 if -10 < angle < 10:
+#                     angles.append(angle)
+
+#         if angles:
+#             median_angle = np.median(angles)
+#             logger.info(
+#                 f"Angle d'inclinaison détecté : {median_angle:.2f} degrés")
+
+#             if abs(median_angle) > 1.0:
+#                 (h, w) = image.shape[:2]
+#                 center = (w // 2, h // 2)
+#                 M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+#                 image = cv2.warpAffine(
+#                     image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+#         if save_path.lower().endswith(".jpg") or save_path.lower().endswith(".jpeg"):
+#             cv2.imwrite(save_path, image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+#         else:
+#             cv2.imwrite(save_path, image)
+
+#         logger.info(f"Image traitée et sauvegardée : {save_path}")
+
+#     except Exception as e:
+#         logger.error(
+#             f"Erreur lors de la correction et du traitement : {str(e)}")
+#         cv2.imwrite(save_path, image)
 
 
 class DetectionService:

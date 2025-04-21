@@ -130,6 +130,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Ajouter à la fin du fichier
 PREPROCESSED_IMGS_DIR = os.path.join(BASE_DIR, 'media\preprocessed_imgs')
+REGIONS_IMGS_DIR = os.path.join(BASE_DIR, 'media\extracted_regions')
 
 # backend_api/settings.py
 

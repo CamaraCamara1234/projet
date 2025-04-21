@@ -239,6 +239,7 @@ def handle_ocr_processing(list_files):
     try:
         t1 = time.time()
         resultats = process_ocr_for_files(list_files)
+        list_regions_name = get_regions_files()
         best_results = {}
         mrz_data = []
 
@@ -266,9 +267,9 @@ def handle_ocr_processing(list_files):
         t2 = time.time()
         return JsonResponse({
             "status": "success",
-            "photo": settings.MEDIA_URL + "extracted_regions/photo.png",
-            "photo_portrait": settings.MEDIA_URL + "extracted_regions/photo_portrait.png",
-            "mrz_image": settings.MEDIA_URL + "extracted_regions/code.png",
+            "photo": settings.MEDIA_URL + "extracted_regions/photo.png" if "photo" in list_regions_name else "N/A",
+            "photo_portrait": settings.MEDIA_URL + "extracted_regions/photo_portrait.png" if "photo_portrait" in list_regions_name else "N/A",
+            "mrz_image": settings.MEDIA_URL + "extracted_regions/code.png" if "code" in list_regions_name else "N/A",
             "cin_recto": settings.MEDIA_URL + f"preprocessed_imgs/{list_files[0]}.jpg",
             "cin_verso": settings.MEDIA_URL + f"preprocessed_imgs/{list_files[1]}.jpg" if len(list_files) >= 2 else "N/A",
             "extracted_data": list(best_results.values()),
@@ -429,6 +430,19 @@ def get_preprocessed_files():
         os.path.splitext(f)[0]
         for f in os.listdir(preprocessed_dir)
         if f.lower().endswith('.jpg')
+    ]
+
+def get_regions_files():
+    """Liste les fichiers prétraités sans extension"""
+    preprocessed_dir = getattr(settings, 'REGIONS_IMGS_DIR',
+                               os.path.join(settings.BASE_DIR, 'media', 'extracted_regions'))
+
+    os.makedirs(preprocessed_dir, exist_ok=True)
+
+    return [
+        os.path.splitext(f)[0]
+        for f in os.listdir(preprocessed_dir)
+        if f.lower().endswith('.png')
     ]
 
 
