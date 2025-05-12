@@ -5,6 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 import logging
 from .services.extraction_service import ExtractZonesTexts
 from .services.detection_service import DetectionService
+from camel_tools.tokenizers.word import simple_word_tokenize
 from datetime import datetime
 import re
 import time
@@ -303,27 +304,31 @@ def map_label(label, list_files):
 
 
 def process_text(result, label, list_files):
+    """Nettoie et formate le texte selon son label."""
     text = (result.text or "").strip()
 
     if not text:
         return "N/A" if label in ["date_naissance", "date_expiration"] else ""
 
-    if label in {"date_naissance", "date_expiration"}:
-        return clean_and_format_date(text) if len(text) >= 10 else "N/A"
+    # Traitements spécifiques par type de label
+    processors = {
+        "date_naissance": lambda t: clean_and_format_date(t) if len(t) >= 10 else "N/A",
+        "date_expiration": lambda t: clean_and_format_date(t) if len(t) >= 10 else "N/A",
+        "mere": lambda t: t.replace("Elde ", "").replace("Etde ", "").replace(",", ""),
+        "mere_ar": lambda t: ocr_postprocessing(t).replace("0", "").replace("1", ""),
+        "pere_ar": lambda t: ocr_postprocessing(t).replace("0", "").replace("1", ""),
+        "ville_ar": advanced_clean,
+        "nationalite_ar": advanced_clean,
+        "ville": lambda t: nettoyage_texte(t.replace("Nationalité ", "")),
+        "nationalite": lambda t: nettoyage_texte(t.replace("Nationalité ", "")),
+        "adresse": nettoyage_texte
+    }
 
-    if label == "mere":
-        return text.replace("Elde ", "").replace("Etde ", "")
+    if label in processors:
+        return processors[label](text)
 
-    if label in {"ville_ar", "nationalite_ar"}:
-        return advanced_clean(text)
-
-    if label in {"ville", "nationalite"}:
-        return nettoyage_texte(text.replace("Nationalité ", ""))
-
-    if label == "adresse":
-        return nettoyage_texte(text)
-
-    if label not in {"code", "num_etat_civil", "adresse_ar", "adresse", "cin"}:
+    # Traitement par défaut pour les autres labels
+    if label not in {"code", "num_etat_civil", "adresse_ar", "adresse", "cin", "photo", "photo_portrait"}:
         cleaned_text = text.replace("1", "I").replace("<", "").replace(">", "")
         return advanced_clean(cleaned_text)
 
@@ -341,6 +346,39 @@ def nettoyage_texte(text):
     return " ".join(words)
 
 
+def correct_ben_bent(text):
+    """
+    Corrige les fusions spécifiques tout en préservant les mots composés corrects
+    """
+    # Traitement prioritaire des cas spécifiques
+    replacements = [
+        (r'(?<! )بنت(?! )(?=[بتكجحخدذرزسشصضطظعغفقكلمنهويأإآى])', 'بنت '),
+        (r'(?<! )ابن(?! )(?=[بتكجحخدذرزسشصضطظعغفقكلمنهويأإآى])', 'ابن '),
+        (r'(?<! )بن(?! )(?=[بتكجحخدذرزسشصضطظعغفقكلمنهويأإآى])', 'بن ')
+    ]
+
+    for pattern, repl in replacements:
+        text = re.sub(pattern, repl, text)
+
+    return text
+
+
+def ocr_postprocessing(text):
+    # Correction des cas spécifiques en premier
+    text = correct_ben_bent(text)
+
+    # Tokenisation intelligente qui préserve "بنت" comme un seul token
+    tokens = []
+    for token in simple_word_tokenize(text):
+        # Recombine "بن"+"ت" en "بنت" si nécessaire
+        if len(tokens) > 0 and tokens[-1] == 'بن' and token == 'ت':
+            tokens[-1] = 'بنت'
+        else:
+            tokens.append(token)
+
+    return ' '.join(tokens)
+
+
 def clean_and_format_date(date_text):
     """
     Nettoie et formate une date pour obtenir le format jj.mm.aaaa
@@ -352,29 +390,36 @@ def clean_and_format_date(date_text):
         str: Date formatée (jj.mm.aaaa) ou None si non valide
     """
     try:
-        date_clean = date_text.replace('1 ', '')
-        # Supprimer tous les caractères non numériques sauf les points existants
+        if not date_text:
+            return None
+
+        # Normaliser les séparateurs : remplacer virgule, espace, tiret par un point
+        date_clean = re.sub(r'[, \-]', '.', date_text)
+        # Nettoyage spécifique si nécessaire
+        date_clean = date_clean.replace('1 ', '')
+
+        # Supprimer tous les caractères non numériques sauf les points
         cleaned = re.sub(r'[^\d.]', '', date_clean)
 
         # Extraire les segments de date
         parts = [p for p in cleaned.split('.') if p]
 
-        # Reconstruire une date valide
+        # Cas classique avec des points
         if len(parts) == 3:
             day, month, year = parts
 
-            # Compléter les segments si nécessaire
+            # Compléter les segments
             day = day.zfill(2)[:2]
             month = month.zfill(2)[:2]
-            year = year[-4:].zfill(4)  # Prendre les 4 derniers chiffres
+            year = year[-4:].zfill(4)
 
             # Valider la date
             datetime.strptime(f"{day}.{month}.{year}", "%d.%m.%Y")
             return f"{day}.{month}.{year}"
 
-        # Cas où la date est presque correcte mais sans séparateurs ("05012027")
+        # Cas sans séparateurs ("05012027")
         elif len(cleaned) >= 8 and '.' not in cleaned:
-            cleaned = cleaned.zfill(8)[:8]  # S'assurer d'avoir 8 chiffres
+            cleaned = cleaned.zfill(8)[:8]
             return f"{cleaned[:2]}.{cleaned[2:4]}.{cleaned[4:8]}"
 
     except (ValueError, AttributeError):
@@ -414,9 +459,14 @@ def advanced_clean(text):
         r'(?<!\w)[^\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFFa-zA-Zéèêëàâäôöûüç]+\s?', '', text)
 
     # Corriger les apostrophes/guillemets mal reconnus
-    text = text.replace('"', "'").replace('“', "'").replace('”', "'")
+    text = text.replace('"', "'").replace(
+        '“', "'").replace('”', "'").replace("٠", "")
 
     return text.strip()
+
+
+def remove_digits(text):
+    return ''.join(c for c in text if not c.isdigit())
 
 
 def get_preprocessed_files():
@@ -431,6 +481,7 @@ def get_preprocessed_files():
         for f in os.listdir(preprocessed_dir)
         if f.lower().endswith('.jpg')
     ]
+
 
 def get_regions_files():
     """Liste les fichiers prétraités sans extension"""
@@ -489,7 +540,48 @@ def process_ocr_for_files(file_list):
     return all_results
 
 
+# def mrz_precessing(mrz_code):
+#     print("--"*50)
+#     print(mrz_code)
+#     print("--"*50)
+#     mrz_data = {}
+#     list_elts = []
+#     current = ""
+#     i = 0
+#     while i < len(mrz_code):
+#         if mrz_code[i] == '<':
+#             if current:  # if we have accumulated characters
+#                 list_elts.append(current)
+#                 current = ""
+#             # Skip consecutive '<' characters
+#             while i < len(mrz_code) and mrz_code[i] == '<':
+#                 i += 1
+#             # Start a new segment
+#             if i < len(mrz_code):
+#                 current = mrz_code[i]
+#                 i += 1
+#         else:
+#             current += mrz_code[i]
+#             i += 1
+#     if current:  # add the last segment if it exists
+#         list_elts.append(current)
+#     print("=====> : ", list_elts[2])
+#     mrz_data["cin_mrz"] = list_elts[1][1:]
+#     mrz_data["date_naiss_mrz"] = list_elts[2][4:6] + \
+#         '.'+list_elts[2][2:4]+'.'+list_elts[2][0:2]
+#     mrz_data["sexe_mrz"] = list_elts[2][9]
+#     mrz_data["date_exp_mrz"] = list_elts[2][13:15] + \
+#         '.'+list_elts[2][11:13]+'.'+list_elts[2][9:11]
+#     mrz_data["pays"] = list_elts[2][-3:]
+#     mrz_data["nom_mrz"] = list_elts[3].split(' ')[1] if len(
+#         list_elts[3].split(' ')) > 1 else list_elts[3].split(' ')[0][1:]
+#     mrz_data["prenom_mrz"] = ' '.join(list_elts[4:])
+
+#     return mrz_data
+
 def mrz_precessing(mrz_code):
+    # Supprimer les retours à la ligne et espaces superflus
+    mrz_code = mrz_code.replace('\n', '')
     mrz_data = {}
     list_elts = []
     current = ""
@@ -513,13 +605,14 @@ def mrz_precessing(mrz_code):
         list_elts.append(current)
     mrz_data["cin_mrz"] = list_elts[1][1:]
     # if int(list_elts[2][0:2]) > 25 and int(list_elts[2][0:2]) <= 99:
-    mrz_data["date_naiss_mrz"] = list_elts[2][5:7] + \
-        '.'+list_elts[2][3:5]+'.'+list_elts[2][1:3]
-    mrz_data["sexe_mrz"] = list_elts[2][8]
-    mrz_data["date_exp_mrz"] = list_elts[2][13:15] + \
-        '.'+list_elts[2][11:13]+'.'+list_elts[2][9:11]
+    mrz_data["date_naiss_mrz"] = list_elts[2][4:6] + \
+        '.'+list_elts[2][2:4]+'.'+list_elts[2][0:2]
+    mrz_data["sexe_mrz"] = list_elts[2][7]
+    mrz_data["date_exp_mrz"] = list_elts[2][12:14] + \
+        '.'+list_elts[2][10:12]+'.'+list_elts[2][8:10]
     mrz_data["pays"] = list_elts[2][-3:]
-    mrz_data["nom_mrz"] = list_elts[3].split(' ')[1]
-    mrz_data["prenom_mrz"] = ' '.join(list_elts[4:])
+    mrz_data["nom_mrz"] = list_elts[3].split(' ')[1] if len(
+        list_elts[3].split(' ')) > 1 else list_elts[3].split(' ')[0][1:]
+    mrz_data["prenom_mrz"] = list_elts[4]
 
     return mrz_data

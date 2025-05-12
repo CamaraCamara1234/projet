@@ -39,7 +39,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'extraction'
+    'extraction',
+    'facial_recognition'
 ]
 
 MIDDLEWARE = [
@@ -77,12 +78,12 @@ WSGI_APPLICATION = 'backend_api.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/3.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
 
 
 # Password validation
@@ -176,3 +177,22 @@ CORS_ALLOW_HEADERS = [
 
 # Pour le développement seulement :
 CORS_ALLOW_ALL_ORIGINS = True
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'face_authentication',
+        'USER': 'root',
+        'PASSWORD': 'root',
+        'HOST': 'localhost',
+        'PORT': '3307',
+    }
+}
+
+
+# Ajoutez dans votre settings.py
+FACE_RECOGNITION_CONFIG = {
+    'AUTO_TRAIN_THRESHOLD': 10,  # Nombre d'images pour déclencher l'entraînement
+    'MIN_IMAGES_PER_USER': 2,    # Minimum pour l'entraînement incrémental
+    'MODEL_PATH': os.path.join(BASE_DIR, 'facial_recognition/face_models/face_model.h5')
+}

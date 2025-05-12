@@ -3,8 +3,6 @@ import os
 import cv2
 import pytesseract
 import numpy as np
-import re
-from paddleocr import PaddleOCR
 from ultralytics import YOLO
 from typing import List, Tuple
 from dataclasses import dataclass
@@ -29,8 +27,6 @@ class ExtractZonesTexts:
     def __init__(self, yolo_model_path: str, lang: str = 'fr'):
         self.lang = lang
         self.yolo_model = YOLO(yolo_model_path)
-        self._paddle_ocr = None
-        self.tess_lang = 'ara' if lang == 'ara' else 'fra'
         self._create_directories()
 
     def _create_directories(self):
@@ -38,12 +34,35 @@ class ExtractZonesTexts:
             os.makedirs(os.path.join(settings.BASE_DIR,
                         "media", subdir), exist_ok=True)
 
-    @property
-    def paddle_ocr(self):
-        if self._paddle_ocr is None:
-            self._paddle_ocr = PaddleOCR(
-                lang='arabic' if self.lang == 'ara' else self.lang)
-        return self._paddle_ocr
+    def _basic_preprocess(self, image: np.ndarray) -> np.ndarray:
+        """Un prétraitement minimal qui préserve la qualité originale"""
+        # Simple conversion en niveaux de gris
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Légère amélioration de contraste sans distortion
+        gray = cv2.normalize(gray, None, alpha=0, beta=255,
+                             norm_type=cv2.NORM_MINMAX)
+
+        return gray
+    # def _basic_preprocess(image: np.ndarray) -> np.ndarray:
+    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    #     gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+    #     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    #     contrast = clahe.apply(gray)
+    #     kernel = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])
+    #     sharpened = cv2.filter2D(contrast, -1, kernel)
+    #     return sharpened
+
+    def _expand_roi(self, roi: np.ndarray, percent: float = 0.15) -> np.ndarray:
+        """Agrandit la région d'intérêt de 15% par défaut"""
+        h, w = roi.shape[:2]
+
+        # Calculer les nouvelles dimensions (15-20% plus grandes)
+        new_h = int(h * (1 + percent))
+        new_w = int(w * (1 + percent))
+
+        # Redimensionner avec interpolation de haute qualité
+        return cv2.resize(roi, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
     def extract_regions(self, image_path: str) -> List[Tuple[str, str, float]]:
         try:
@@ -61,36 +80,41 @@ class ExtractZonesTexts:
             extracted_regions = []
             list_face = self.get_preprocessed_files()
 
+            # D'abord extraire photo, photo_portrait et code sans modification
+            special_labels = {"photo", "photo_portrait", "code"}
+            special_regions = []
+
             for box in result.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 label = result.names[int(box.cls)]
                 confidence = float(box.conf)
 
-                if label in {"pere"} and "new_cin_recto" in list_face:
-                    x2 += int(x2 * 0.02)
-                # if label == "ville_ar" and any(face in list_face for face in ("new_cin_recto", "old_cin_recto")):
-                #     x2 -= int(x2 * 0.03)
-                if label == "ville_ar" and any(face in list_face for face in ("sejour_recto", "sejour_verso")):
-                    x2 -= int(x2 * 0.077)
-                    y1 += int(y1 * 0.02)
-
+                # Découpage normal de la région
                 roi = img[y1:y2, x1:x2]
-                h, w = roi.shape[:2]
 
-                if max(h, w) < 150 and label != "sexe":
-                    scale = 140 / max(h, w)
-                    new_w, new_h = int(w * scale), int(h * scale)
-                    roi = cv2.resize(roi, (new_w, new_h),
-                                     interpolation=cv2.INTER_LANCZOS4)
+                if label in special_labels:
+                    # Sauvegarder les zones spéciales sans modification
+                    output_path = os.path.join(extracted_dir, f"{label}.png")
+                    cv2.imwrite(output_path, roi, [
+                                cv2.IMWRITE_JPEG_QUALITY, 100])
+                    special_regions.append((label, output_path, confidence))
+                    continue
+
+                # Pour les autres zones, appliquer le prétraitement en gris
+                roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                roi_gray = cv2.cvtColor(roi_gray, cv2.COLOR_GRAY2BGR)
+
+                # Appliquer l'agrandissement de 15-20% après le découpage
+                roi_expanded = self._expand_roi(roi_gray, percent=0.30)
+                roi_expanded = cv2.convertScaleAbs(
+                    roi_expanded, alpha=1.0, beta=0)
 
                 output_path = os.path.join(extracted_dir, f"{label}.png")
-
-                # Enregistrement avec qualité maximale (JPEG)
-                cv2.imwrite(output_path, roi, [cv2.IMWRITE_JPEG_QUALITY, 95])
-
+                cv2.imwrite(output_path, roi_expanded, [
+                            cv2.IMWRITE_JPEG_QUALITY, 100])
                 extracted_regions.append((label, output_path, confidence))
 
-            return extracted_regions
+            return special_regions + extracted_regions
 
         except Exception as e:
             logger.error(f"[Extraction Régions] Erreur : {str(e)}")
@@ -102,28 +126,32 @@ class ExtractZonesTexts:
             if image is None:
                 raise ValueError(f"Image non trouvée : {image_path}")
 
-            lang_tess = "fra" if lang == "fr" else "ara"
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-            result_paddle = self.paddle_ocr.ocr(image_path)
-            text_paddle = " ".join(
-                [line[1][0] for line in result_paddle[0]]) if result_paddle and result_paddle[0] else ""
-
-            psm = "11" if lang == "ar" else "7"
-            text_tesseract = pytesseract.image_to_string(
-                gray, config=f"--oem 3 --psm {psm} -l {lang_tess}").strip()
-
-            if lang == 'ar' and text_tesseract:
-                best_text = text_tesseract
+            label = os.path.basename(image_path).replace(".png", "")
+            if label == "code":
+                # Prétraitement minimal
+                processed_image = self._basic_preprocess(image)
+                config = f'--psm 11 --oem 3 -c preserve_interword_spaces=1'
             else:
-                best_text = max([text_paddle, text_tesseract], key=len)
+                processed_image = cv2.imread(image_path)
+                config = f'--psm 6 --oem 3 -c preserve_interword_spaces=1'
+
+            # Configuration Tesseract
+            tess_lang = 'ara' if lang == 'ar' else 'fra'
+
+            # Essayer différents modes PSM si nécessaire
+            # for psm in [6, 4]:  # Essayez différents modes de segmentation
+            text = pytesseract.image_to_string(
+                processed_image,
+                lang=tess_lang,
+                config=config
+            ).strip()
 
             return ExtractionResult(
                 label=os.path.basename(image_path),
                 image_path=image_path,
-                text=best_text,
+                text=text,
                 confidence=1.0,
-                ocr_engine="combined"
+                ocr_engine="tesseract"
             )
         except Exception as e:
             logger.error(f"[OCR] Erreur d'extraction du texte : {str(e)}")
@@ -147,7 +175,7 @@ class ExtractZonesTexts:
             regions = self.extract_regions(image_path)
             results = []
             for label, region_path, confidence in regions:
-                if label != "photo" and label != "photo_portrait":
+                if label not in {"photo", "photo_portrait"}:
                     try:
                         lang = "ar" if "_ar" in label else "fr"
                         result = self.extract_text(region_path, lang=lang)

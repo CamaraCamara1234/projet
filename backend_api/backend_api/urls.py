@@ -19,7 +19,7 @@ from extraction.views import extract_regions_view, extract_regions_dual_view, ex
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.conf.urls.static import static
-from facial_recognition.views import verify_faces, clear_media_dirs
+from facial_recognition.views import verify_faces, clear_media_dirs, verify_faces_advanced, register_face, verify_face1, train_model
 
 urlpatterns = [
     path('extraction/', csrf_exempt(extract_regions_view), name='extraction_api'),
@@ -29,5 +29,13 @@ urlpatterns = [
          name='extraction_api_front'),
     path('face_verification/', csrf_exempt(verify_faces),
          name='face_verification_api'),
+    path('face_verification_advanced/', csrf_exempt(verify_faces_advanced),
+         name='face_verification_advanced_api'),
+    path('register_face/', csrf_exempt(register_face),
+         name='regiter_face_api'),
+    path('search_face/', csrf_exempt(verify_face1),
+         name='search_face_api'),
+    path('train_model/', csrf_exempt(train_model),
+         name='train_model_api'),
     path('clear-directories/', csrf_exempt(clear_media_dirs), name='clear_media_dirs')
 ]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
