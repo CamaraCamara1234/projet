@@ -185,131 +185,107 @@ def verify_faces_advanced(request):
 
 @csrf_exempt
 def register_face(request):
+    """Endpoint pour enregistrer un nouveau visage avec augmentations."""
     if request.method == 'POST':
         try:
-            # Récupération des données
+            # Gestion des différents formats d'entrée
             if request.FILES:
                 username = request.POST.get('username')
                 img_file = request.FILES.get('photo')
+                img = Image.open(img_file).convert('RGB')
             else:
                 data = json.loads(request.body.decode('utf-8'))
                 username = data.get('username')
-                img_data = data.get('photo')
-
-            if not username or (not img_file and not img_data):
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Champs username et photo requis'
-                }, status=400)
-
-            # Traitement de l'image
-            if img_file:
-                ext = img_file.name.split('.')[-1].lower()
-                img_bytes = img_file.read()
-            else:
-                header, base64_str = img_data.split(';base64,')
-                ext = header.split('/')[-1].lower()
+                base64_str = data.get('photo').split(',')[1]
                 img_bytes = base64.b64decode(base64_str)
+                img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-            # Sauvegarde
-            user_dir = os.path.join(settings.MEDIA_ROOT, "data", username)
-            os.makedirs(user_dir, exist_ok=True)
-            filename = f"{uuid.uuid4()}.{ext}"
-            filepath = os.path.join(user_dir, filename)
+            # Validation des entrées
+            if not username or img is None:
+                return JsonResponse(
+                    {'status': 'error', 'message': 'Champs manquants'},
+                    status=400
+                )
 
-            with open(filepath, 'wb') as f:
-                f.write(img_bytes)
+            # Calcul des embeddings
+            embeddings = compute_embeddings(img)
+            if not embeddings:
+                return JsonResponse(
+                    {'status': 'error', 'message': 'Visage non détecté'},
+                    status=400
+                )
 
-            # Traitement du visage
-            preprocessor = FacePreprocessor()
-            face = preprocessor.process(filepath)
-            processed_filename = f"processed_{filename}"
-            processed_path = os.path.join(user_dir, processed_filename)
-            cv2.imwrite(processed_path, cv2.cvtColor(
-                (face * 255).astype('uint8'), cv2.COLOR_RGB2BGR))
-
-            # Entraînement incrémental
-            data_manager = FaceDataManager()
-            trained = data_manager.incremental_train(username)
+            # Sauvegarde des embeddings
+            for emb in embeddings:
+                save_embedding(username, emb)
 
             return JsonResponse({
                 'status': 'success',
-                'filename': processed_filename,
-                'trained': trained,
-                'message': 'Entraînement réussi' if trained else 'Entraînement différé (plus d\'images nécessaires)'
+                'message': f'{len(embeddings)} visages enregistrés'
             })
 
         except Exception as e:
-            return JsonResponse({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
+            return JsonResponse(
+                {'status': 'error', 'message': str(e)},
+                status=500
+            )
 
-
-# ----------------------------------------------------------
-# ENDPOINT DE VERIFICATION
-# ----------------------------------------------------------
 @csrf_exempt
 def verify_face1(request):
+    """Endpoint pour vérifier un visage contre les enregistrements existants."""
     if request.method == 'POST':
         try:
-            # 1. Validation des entrées
-            if 'username' not in request.POST or 'photo' not in request.FILES:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Les champs username et photo sont requis'
-                }, status=400)
+            # Récupération des données
+            username = request.POST.get('username')
+            img_file = request.FILES.get('photo')
 
-            # 2. Sauvegarde temporaire
-            temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp')
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, f'{uuid.uuid4()}.jpg')
+            # Validation des entrées
+            if not username or not img_file:
+                return JsonResponse(
+                    {'status': 'error', 'message': 'Champs manquants'},
+                    status=400
+                )
 
-            with open(temp_path, 'wb+') as f:
-                for chunk in request.FILES['photo'].chunks():
-                    f.write(chunk)
+            # Détection du visage
+            img = Image.open(img_file).convert('RGB')
+            face = mtcnn(img)
+            if face is None:
+                return JsonResponse(
+                    {'status': 'error', 'message': 'Visage non détecté'},
+                    status=400
+                )
 
-            # 3. Vérification faciale
-            verifier = FaceVerifier()
-            result = verifier.verify_face(temp_path, request.POST['username'])
+            # Calcul de l'embedding
+            with torch.no_grad():
+                input_emb = facenet(face.unsqueeze(0).to(device))
+                input_emb = torch.nn.functional.normalize(input_emb, p=2, dim=1)
+                input_emb = input_emb.squeeze(0).cpu().numpy()
 
-            # 4. Conversion des types NumPy avant sérialisation
-            serializable_result = {
-                'status': str(result['status']),
-                'verified': bool(result['verified']),  # Conversion explicite
-                'confidence': float(result['confidence']),
-                'threshold': float(result['threshold']),
-                'comparisons': int(result['comparisons']),
-                'best_match': str(result.get('best_match', ''))
-            }
+            # Récupération des embeddings enregistrés
+            stored_embeddings = get_user_embeddings(username)
+            if len(stored_embeddings) == 0:
+                return JsonResponse(
+                    {'status': 'error', 'message': 'Aucune donnée pour cet utilisateur'},
+                    status=404
+                )
 
-            # 5. Nettoyage
-            os.remove(temp_path)
+            # Calcul de similarité
+            similarities = cosine_similarity([input_emb], stored_embeddings)[0]
+            best_score = float(np.max(similarities))
+            threshold = 0.7  # Plus haut = plus strict
 
-            return JsonResponse(serializable_result)
-
-        except Exception as e:
             return JsonResponse({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
-
-
-@csrf_exempt
-def train_model(request):
-    if request.method == 'POST':
-        try:
-            success, message = full_training()
-            return JsonResponse({
-                'status': 'success' if success else 'error',
-                'message': message
+                'status': 'success',
+                'verified': best_score > threshold,
+                'similarity_score': best_score,
+                'threshold': threshold
             })
-        except Exception as e:
-            return JsonResponse({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
 
+        except Exception as e:
+            return JsonResponse(
+                {'status': 'error', 'message': str(e)},
+                status=500
+            )
 
 def clear_media_dirs(request):
     dirs_to_clear = ['preprocessed_imgs', 'extracted_regions']
